@@ -28,7 +28,8 @@
 #include "qapi/qapi-visit-block-core.h"
 #include "qemu/module.h"
 #include "qemu/option.h"
-#include "sysemu/block-backend.h"
+#include "system/block-backend.h"
+#include "qemu/memalign.h"
 #include "block/block.h"
 #include "block/block_int.h"
 #include "block/block_int-common.h"
@@ -170,7 +171,7 @@ int logging  = 0;
 
 FILE *LOGFH = NULL;
 
-void logprintf(const char *format, ...);
+void logprintf(const char *format, ...) G_GNUC_PRINTF(1, 2);
 
 static int zvhd_read(BlockDriverState *bs, int64_t sector_num,
                     uint8_t *buf, int nb_sectors);
@@ -328,7 +329,7 @@ void logprintf(const char *format, ...)
 
 }
 
-static coroutine_fn int zvhd_co_read(BlockDriverState *bs, int64_t sector_num,
+static coroutine_fn int G_GNUC_UNUSED zvhd_co_read(BlockDriverState *bs, int64_t sector_num,
                                     uint8_t *buf, int nb_sectors)
 {
     int ret;
@@ -412,8 +413,8 @@ static int zvhd_get_more_data(BlockDriverState *bs,zvhd_context_t *zvhd ,int *to
     return 0;
 }
 
-static coroutine_fn int zvhd_co_preadv(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
-                                       QEMUIOVector *qiov, int flags)
+static coroutine_fn int zvhd_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                                       QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     printf("begin to pread file \n");
     int ret;
@@ -707,10 +708,10 @@ static int zvhd_write(BlockDriverState *bs, int64_t sector_num,
     int ret = 0;
     int postfix_offset = 0;
 
-    printf("total sectors : %d \n", zvhd->sectors);
+    printf("total sectors : %lu \n", (unsigned long)zvhd->sectors);
     //int begin_index = (sector_num % BLOCK_SIZE_SECTOR) << 9;
     int begin_block = sector_num / BLOCK_SIZE_SECTOR;
-    printf("total size: %d, sector_num: %d, nb_sectors: %d", total_size, sector_num, nb_sectors);
+    printf("total size: %d, sector_num: %ld, nb_sectors: %ld", total_size, (long)sector_num, (long)nb_sectors);
     memcpy(zvhd->zero_buf,buf,total_size);
     
     memcpy(zvhd->data_buf->prefix,ZVHD_DATA_PREFIX,ZVHD_DATA_PREFIX_LEN - 1);
@@ -755,7 +756,7 @@ static int zvhd_write(BlockDriverState *bs, int64_t sector_num,
     //when write end,rewrite the footer
     if ((sector_num + nb_sectors) >= zvhd->sectors)
     {
-        printf("enter zvhd last sector write, total sectors : %d \n", zvhd->sectors);
+        printf("enter zvhd last sector write, total sectors : %lu \n", (unsigned long)zvhd->sectors);
         ret = bdrv_pwrite_sync(bs->file, zvhd->cur_offset, FOOTER_SIZE, zvhd->footer_buf, 0);
          if (ret < 0) {
              printf("write last sector fail\n");
@@ -767,7 +768,7 @@ static int zvhd_write(BlockDriverState *bs, int64_t sector_num,
     return 0;
 }
 
-static coroutine_fn int zvhd_co_write(BlockDriverState *bs, int64_t sector_num,
+static coroutine_fn int G_GNUC_UNUSED zvhd_co_write(BlockDriverState *bs, int64_t sector_num,
                                      const uint8_t *buf, int nb_sectors)
 {
     int ret;
@@ -778,8 +779,8 @@ static coroutine_fn int zvhd_co_write(BlockDriverState *bs, int64_t sector_num,
     return ret;
 }
 
-static coroutine_fn int zvhd_co_pwritev(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
-                                        QEMUIOVector *qiov, int flags)
+static coroutine_fn int zvhd_co_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                                        QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     int ret;
     int64_t sector_num = offset >> VHD_SECTOR_SHIFT;
@@ -805,7 +806,7 @@ static coroutine_fn int zvhd_co_pwritev(BlockDriverState *bs, uint64_t offset, u
         buf = (uint8_t *)qiov->iov->iov_base;
     }
 
-    printf("begin to zvhd write file,sector_num: %d, nb_sectors: %d  \n", sector_num, nb_sectors);
+    printf("begin to zvhd write file,sector_num: %ld, nb_sectors: %ld  \n", (long)sector_num, (long)nb_sectors);
     ret = zvhd_write(bs, sector_num, buf, nb_sectors);
     printf("zvhd write file succ\n");
     if (qiov->niov > 1) {
@@ -830,7 +831,8 @@ static void zvhdinitializefooter(zvhd_context_t *ctx, int type, uint64_t size)
     ctx->footer->type         = type;
     ctx->footer->saved        = 0;
     ctx->footer->data_offset  = 0xFFFFFFFFFFFFFFFFULL;
-    strncpy(ctx->footer->crtr_app, "tap",sizeof(ctx->footer->crtr_app) - 1);
+    memcpy(ctx->footer->crtr_app, "tap", 3);
+    ctx->footer->crtr_app[3] = '\0';
     qemu_uuid_generate(&ctx->footer->uuid);
     ctx->footer->checksum = pvhd_checksum_footer(ctx->footer);
 }
@@ -841,6 +843,7 @@ static int coroutine_fn zvhd_co_do_create(const char *filename,
     BlockDriverState *bs = NULL;
     int ret = 0;
     zvhd_context_t g_zvhd;
+    memset(&g_zvhd, 0, sizeof(g_zvhd));
 
     /* Create and open the file */
     ret = bdrv_create(NULL, filename, NULL, errp);
@@ -875,7 +878,7 @@ exit:
     return ret;
 }
 
-static int zvhd_co_create_opts(const char *filename, QemuOpts *opts, Error **errp)
+static int zvhd_co_create_opts(BlockDriver *drv, const char *filename, QemuOpts *opts, Error **errp)
 {
     int64_t total_size;
     int ret = -EIO;

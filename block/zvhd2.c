@@ -29,6 +29,8 @@
 #include "block/block.h"
 #include "block/block_int-common.h"
 #include "qemu/uuid.h"
+#include "qemu/memalign.h"
+#include "qapi/error.h"
 #define USE_COMP_WRAPPER
 #ifdef USE_COMP_WRAPPER
 #include "comp_wrapper_def.h"
@@ -132,7 +134,7 @@ enum LOG_LEVEL
     LOG_WARN,
     LOG_DEBUG,
 };
-const void * log_level_str[] = {"fatal","error","info","warn","debug"};
+const char * log_level_str[] = {"fatal","error","info","warn","debug"};
 
 #define FREE(m) \
     if ((m))\
@@ -280,7 +282,7 @@ enum COMPRESS_METHOD
 #define  DEFAULT_COMPRESS_METHOD COMPRESS_METHOD_ZSTD
 #endif
 
-void __zvhd2_logprintf(int level, const char *format, ...);
+void __zvhd2_logprintf(int level, const char *format, ...) G_GNUC_PRINTF(2, 3);
 
 #define LOG(LEVEL,fmt,args...) __zvhd2_logprintf(LEVEL,"[%s][%s:%s:%d] "fmt,log_level_str[LEVEL],__FILE__,__func__,__LINE__, ##args);
 #define LOG_FATAL(fmt,args...) LOG(LOG_FATAL,fmt,##args);
@@ -470,8 +472,8 @@ void __zvhd2_logprintf(int level, const char *format, ...)
 
 }
 
-static coroutine_fn int zvhd2_co_preadv(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
-                                        QEMUIOVector *qiov, int flags)
+static coroutine_fn int zvhd2_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                                        QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     int ret;
     //根据当前的偏移量计算扇区数
@@ -517,7 +519,7 @@ static coroutine_fn int zvhd2_co_preadv(BlockDriverState *bs, uint64_t offset, u
     return ret;
 }
  
-static coroutine_fn int zvhd2_co_read(BlockDriverState *bs, int64_t sector_num,
+static coroutine_fn int G_GNUC_UNUSED zvhd2_co_read(BlockDriverState *bs, int64_t sector_num,
                                     uint8_t *buf, int nb_sectors)
 {
     int ret;
@@ -767,7 +769,7 @@ int __zvhd2_index_initiliaze(zvhd2_index_t * zvhd2_index, uint32_t max_blk_num, 
     if(test_4K_blocks != zvhd2_index->index_seg_size)
     {
         LOG_ERROR("ZVHD2_INDEX_SEG_SIZE=%d, is not aligned with %d\n",ZVHD2_INDEX_SEG_SIZE,BLOCK_SIZE);
-        LOG_ERROR("ZVHD2_INDEX_SEG_SIZE=%llu, is not aligned with %d\n",test_4K_blocks,zvhd2_index->index_seg_size);
+        LOG_ERROR("ZVHD2_INDEX_SEG_SIZE=%llu, is not aligned with %d\n",(unsigned long long)test_4K_blocks,zvhd2_index->index_seg_size);
         return -1;
     }
     
@@ -1246,7 +1248,7 @@ int __zvhd2_index_debug(zvhd2_index_store_t * idx_store , uint32_t blk_count)
         if(idx_entry->blk_offset != 0 && idx_entry->blk_disk_size != 0)
         {
             LOG_ERROR("index entry %d: offset %llu, size %d,  real_blk_num[%u]  \n",
-                                entry_idx,idx_entry->blk_offset, idx_entry->blk_disk_size, idx_entry->blk_num);
+                                entry_idx,(unsigned long long)idx_entry->blk_offset, idx_entry->blk_disk_size, idx_entry->blk_num);
         }
     }
     return ret;
@@ -1385,7 +1387,7 @@ static int zvhd2_read_with_indexbm(BlockDriverState *bs, int64_t sector_num,
     ret = __zvhd2_index_read(bs, block_num, &blk_offset, &blk_disk_size);
     if(ret)
     {
-        LOG_ERROR("error ret=%d, read block %u : %llu,%u\n",ret,block_num,blk_offset, blk_disk_size);
+        LOG_ERROR("error ret=%d, read block %u : %llu,%u\n",ret,block_num,(unsigned long long)blk_offset, blk_disk_size);
         return ret;
     }
 
@@ -1542,7 +1544,7 @@ static int zvhd2_open(BlockDriverState *bs, QDict *options, int flags,
     int cluster_bits = ffs(zvhd2->blk_size) - 1;
     if ((1 << cluster_bits) != zvhd2->blk_size)
     {
-        LOG_ERROR( "Cluster size %lu is not a power of two", zvhd2->blk_size);
+        LOG_ERROR( "Cluster size %lu is not a power of two", (unsigned long)zvhd2->blk_size);
         ret = -1;
         goto fail;
     }
@@ -1776,7 +1778,7 @@ static int zvhd2_write_bitmap(BlockDriverState *bs, int64_t sector_num,int nb_se
         ret = bdrv_pwrite_sync(bs->file, zvhd2->cur_offset, zvhd2_index->bm_seg_size, bm_store->store_buffer, 0);
         if (ret < 0) 
         {
-            LOG_ERROR("write segment %d failed, at %llu size %u, ret=%d \n", i, zvhd2->cur_offset, zvhd2_index->bm_seg_size,ret);
+            LOG_ERROR("write segment %d failed, at %llu size %u, ret=%d \n", i, (unsigned long long)zvhd2->cur_offset, zvhd2_index->bm_seg_size,ret);
             return -1;
         }
         
@@ -1890,7 +1892,7 @@ static int zvhd2_write(BlockDriverState *bs, int64_t sector_num,
         ret = __zvhd2_index_set(&(zvhd2->zvhd2_index), cur_blk,
                     zvhd2->cur_offset, zvhd2->data_buf->curr_blk, zvhd2->curr_buf_size);
         if (ret) {
-            LOG_ERROR("record index info failed: offset %llu, size %d, block[%u] \n", zvhd2->cur_offset, zvhd2->curr_buf_size, zvhd2->data_buf->curr_blk);
+            LOG_ERROR("record index info failed: offset %llu, size %d, block[%u] \n", (unsigned long long)zvhd2->cur_offset, zvhd2->curr_buf_size, zvhd2->data_buf->curr_blk);
             return -1;
         }
 
@@ -1939,8 +1941,8 @@ static int zvhd2_write(BlockDriverState *bs, int64_t sector_num,
     return 0;
 }
 
-static coroutine_fn int zvhd_co_pwritev(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
-                                        QEMUIOVector *qiov, int flags)
+static coroutine_fn int zvhd_co_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                                        QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     int ret;
     int64_t sector_num = offset >> VHD_SECTOR_SHIFT;
@@ -1975,7 +1977,7 @@ static coroutine_fn int zvhd_co_pwritev(BlockDriverState *bs, uint64_t offset, u
     return ret;
 }
 
-static coroutine_fn int zvhd2_co_write(BlockDriverState *bs, int64_t sector_num,
+static coroutine_fn int G_GNUC_UNUSED zvhd2_co_write(BlockDriverState *bs, int64_t sector_num,
                                      const uint8_t *buf, int nb_sectors)
 {
     int ret;
@@ -2025,13 +2027,14 @@ static void zvhd2initializefooter(zvhd2_context_t *ctx, int type, uint64_t size,
 
     ctx->footer->compress_method = DEFAULT_COMPRESS_METHOD;
     
-    strncpy(ctx->footer->crtr_app, "tap",sizeof(ctx->footer->crtr_app) - 1);
+    memcpy(ctx->footer->crtr_app, "tap", 3);
+    ctx->footer->crtr_app[3] = '\0';
     qemu_uuid_generate(&ctx->footer->uuid);
     ctx->footer->checksum = pvhd_checksum_footer(ctx->footer);
 }
 
 
-static int zvhd2_create(const char *filename, QemuOpts *opts, Error **errp)
+static int zvhd2_create(BlockDriver *drv, const char *filename, QemuOpts *opts, Error **errp)
 {
     int64_t total_size;
     int ret = -EIO;
