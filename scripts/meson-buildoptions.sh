@@ -231,6 +231,7 @@ meson_options_help() {
   printf "%s\n" '                  Xen PCI passthrough support'
   printf "%s\n" '  xkbcommon       xkbcommon support'
   printf "%s\n" '  zstd            zstd compression support'
+  printf "%s\n" '  zvhd            zvhd/zvhd2 image format support'
 }
 _meson_option_parse() {
   case $1 in
@@ -588,6 +589,8 @@ _meson_option_parse() {
     --disable-xkbcommon) printf "%s" -Dxkbcommon=disabled ;;
     --enable-zstd) printf "%s" -Dzstd=enabled ;;
     --disable-zstd) printf "%s" -Dzstd=disabled ;;
+    --enable-zvhd) printf "%s" -Dzvhd=enabled ;;
+    --disable-zvhd) printf "%s" -Dzvhd=disabled ;;
     *) return 1 ;;
   esac
 }

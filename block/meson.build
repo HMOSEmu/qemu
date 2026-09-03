@@ -63,6 +63,13 @@ endif
 if get_option('vpc').allowed()
   block_ss.add(files('vpc.c'))
 endif
+if get_option('zvhd').allowed()
+  block_ss.add(files(
+    'zvhd.c',
+    'zvhd2.c',
+    'comp_wrapper.c'
+  ), zstd)
+endif
 if get_option('cloop').allowed()
   block_ss.add(files('cloop.c'))
 endif

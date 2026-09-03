@@ -145,6 +145,12 @@
 #include "qemu/keyval.h"
 #include "memory-internal.h"
 
+#include "harmony/pipe/harmony-pipe.h"
+#include "harmony/pipe/loop-pipe.h"
+#include "harmony/pipe/websock-passthrough-pipe.h"
+#include "harmony/pipe/audio-pipe.h"
+#include "harmony/server/harmony-server.h"
+
 #define MAX_VIRTIO_CONSOLES 1
 
 typedef struct BlockdevOptionsQueueEntry {
@@ -3730,6 +3736,11 @@ void qemu_init(int argc, char **argv)
             }
 #endif /* CONFIG_POSIX */
 
+            case QEMU_OPTION_harmony_server: {
+                harmony_server_opts_parse(optarg);
+                break;
+            }
+
             default:
                 error_report("Option not supported in this build");
                 exit(1);
@@ -3867,4 +3878,13 @@ void qemu_init(int argc, char **argv)
         os_setup_post();
     }
     resume_mux_open();
+
+    qemu_harmony_pipe_init();
+    harmony_pipe_add_service_loop();
+    harmony_pipe_add_service_websock_passthrough();
+    harmony_pipe_add_service_audio();
+
+    harmony_server_init(NULL,
+                    qemu_find_opts_singleton("harmony-server"),
+                    &error_fatal);
 }

@@ -75,7 +75,7 @@ typedef void VncSendHextileTile(VncState *vs,
 /* VNC_MAX_WIDTH must be a multiple of VNC_DIRTY_PIXELS_PER_BIT. */
 
 #define VNC_MAX_WIDTH ROUND_UP(5120, VNC_DIRTY_PIXELS_PER_BIT)
-#define VNC_MAX_HEIGHT 2160
+#define VNC_MAX_HEIGHT 4096
 
 /* VNC_DIRTY_BITS is the number of bits in the dirty bitmap. */
 #define VNC_DIRTY_BITS (VNC_MAX_WIDTH / VNC_DIRTY_PIXELS_PER_BIT)
@@ -272,6 +272,7 @@ struct VncState
     int has_dirty;
     uint32_t features;
     int absolute;
+    bool multitouch;
     int last_x;
     int last_y;
     uint32_t last_bmask;

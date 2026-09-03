@@ -339,6 +339,8 @@ option('qcow1', type: 'feature', value: 'auto',
        description: 'qcow1 image format support')
 option('vdi', type: 'feature', value: 'auto',
        description: 'vdi image format support')
+option('zvhd', type: 'feature', value: 'disabled',
+       description: 'zvhd/zvhd2 image format support')
 option('vhdx', type: 'feature', value: 'auto',
        description: 'vhdx image format support')
 option('vmdk', type: 'feature', value: 'auto',

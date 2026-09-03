@@ -475,6 +475,15 @@ bool qemu_input_is_absolute(const QemuConsole *con)
     return (s != NULL) && (s->handler->mask & INPUT_EVENT_MASK_ABS);
 }
 
+bool qemu_input_is_multitouch(const QemuConsole *con)
+{
+    QemuInputHandlerState *s;
+
+    s = qemu_input_find_handler(INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_MTT,
+                                con);
+    return (s != NULL) && (s->handler->mask & INPUT_EVENT_MASK_MTT);
+}
+
 uint32_t qemu_input_get_leds_mask(const QemuConsole *con)
 {
     QemuInputHandlerState *s;

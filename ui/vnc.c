@@ -59,7 +59,7 @@
 #include "monitor/monitor.h"
 
 #define VNC_REFRESH_INTERVAL_BASE GUI_REFRESH_INTERVAL_DEFAULT
-#define VNC_REFRESH_INTERVAL_INC  50
+#define VNC_REFRESH_INTERVAL_INC  0
 #define VNC_REFRESH_INTERVAL_MAX  GUI_REFRESH_INTERVAL_IDLE
 static const struct timeval VNC_REFRESH_STATS = { 0, 500000 };
 static const struct timeval VNC_REFRESH_LOSSY = { 2, 0 };
@@ -1753,6 +1753,39 @@ static void check_pointer_type_change(Notifier *notifier, void *data)
         vnc_flush(vs);
     }
     vs->absolute = absolute;
+    vs->multitouch = qemu_input_is_multitouch(vs->vd->dcl.con);
+}
+
+static void multitouch_event(VncState *vs, uint8_t button_mask,
+                             int x, int y, int width, int height)
+{
+    QemuConsole *con = vs->vd->dcl.con;
+
+    if (button_mask > 0){
+        if(vs->last_bmask < 1 ){
+            qemu_input_queue_mtt(con, INPUT_MULTI_TOUCH_TYPE_BEGIN, 0, 0);
+        } else {
+            qemu_input_queue_mtt(con, INPUT_MULTI_TOUCH_TYPE_UPDATE, 0, 0);
+        }
+        qemu_input_queue_btn(con, INPUT_BUTTON_TOUCH, true);
+
+        qemu_input_queue_mtt_abs(con,
+                                INPUT_AXIS_X,  x,
+                                0, width,
+                                0, 0);
+        qemu_input_queue_mtt_abs(con,
+                                INPUT_AXIS_Y, y,
+                                0, height,
+                                0, 0);
+    }
+    if (button_mask == 0 && vs->last_bmask > 0){
+        qemu_input_queue_mtt(con, INPUT_MULTI_TOUCH_TYPE_END, 0, -1);
+    }
+
+    if (vs->last_bmask != button_mask) {
+        vs->last_bmask = button_mask;
+    }
+    qemu_input_event_sync();
 }
 
 static void pointer_event(VncState *vs, uint8_t button_mask,
@@ -1768,6 +1801,9 @@ static void pointer_event(VncState *vs, uint8_t button_mask,
     QemuConsole *con = vs->vd->dcl.con;
     int width = pixman_image_get_width(vs->vd->server);
     int height = pixman_image_get_height(vs->vd->server);
+    if (vs->multitouch){
+        return multitouch_event(vs, button_mask, x, y, width, height);
+    }
 
     if (vs->last_bmask != button_mask) {
         qemu_input_update_buttons(con, bmap, vs->last_bmask, button_mask);
@@ -2106,6 +2142,7 @@ static void set_encodings(VncState *vs, int32_t *encodings, size_t n_encodings)
     vc->worker.tight.compression = 9;
     vc->worker.tight.quality = -1; /* Lossless by default */
     vs->absolute = -1;
+    vs->multitouch = false;
 
     /*
      * Start from the end because the encodings are sent in order of preference.

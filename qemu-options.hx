@@ -6668,6 +6668,17 @@ SRST
 ERST
 
 
+DEF("harmony-server", HAS_ARG, QEMU_OPTION_harmony_server,
+    "-harmony-server <PORT_NUMBER>,[quality=1-100],[refresh_interval=1-1000]\n"
+    "                start harmony websocket server with PORT_NUMBER.\n"
+    "                quality is optional, display quality with 0-100 percent, default:100.\n"
+    "                refresh_interval[optional]: display refresh interval, in microseconds, default:30.\n", QEMU_ARCH_ALL)
+SRST
+``-harmony-server``
+    Use it to start harmony websocket server.
+ERST
+
+
 HXCOMM This is the last statement. Insert new options before this line!
 
 #undef DEF
