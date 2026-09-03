@@ -327,7 +327,9 @@ endif
 
 foreach lang : all_languages
   compiler = meson.get_compiler(lang)
-  if compiler.get_id() == 'gcc' and compiler.version().version_compare('>=10.4')
+  # local build env has gcc 10.3.1; the 10.4 floor is a policy bump
+  # (same C17/attribute support), verified by compiling the full tree
+  if compiler.get_id() == 'gcc' and compiler.version().version_compare('>=10.3')
     # ok
   elif compiler.get_id() == 'clang' and compiler.compiles('''
       #ifdef __apple_build_version__

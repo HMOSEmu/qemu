@@ -318,7 +318,7 @@ FIELD(ICSR, HM, 5, 1)
 FIELD(ICSR, PRIORITY, 11, 5)
 FIELD(ICSR, IAFFID, 32, 16)
 
-#define IRS_DEVARCH_VALUE ((0x23b << 31) | (0x1 << 20) | 0x5a19)
+#define IRS_DEVARCH_VALUE ((0x23bU << 31) | (0x1U << 20) | 0x5a19U)
 
 static uint32_t gicv5_idreg(int regoffset)
 {

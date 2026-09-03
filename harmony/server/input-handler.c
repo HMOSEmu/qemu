@@ -1,6 +1,6 @@
 
 #include "qemu/osdep.h"
-#include "sysemu/sysemu.h"
+#include "system/system.h"
 #include "ui/console.h"
 #include "ui/input.h"
 #include "ui/vnc_keysym.h"
@@ -34,7 +34,7 @@ static void pointer_type_change_notifier(Notifier *notifier, void *data)
     hci->multitouch = qemu_input_is_multitouch(con);
 }
 
-static void multitouch_event(HarmonyClientInput *hci, uint8_t bmask, int x, int y) 
+static void multitouch_event(HarmonyClientInput *hci, uint8_t bmask, int x, int y)
 {
     HarmonyServerInput *hsi = hci->hsi;
     QemuConsole *con = hsi->hsd->dcl.con;
@@ -72,20 +72,9 @@ static void multitouch_event(HarmonyClientInput *hci, uint8_t bmask, int x, int 
 
 static void do_key_event(HarmonyClientInput *hci, int down, int keycode, int sym)
 {
-    HarmonyServerInput *hsi = hci->hsi;
-    QemuConsole *con = hsi->hsd->dcl.con;
     QKeyCode qcode = qemu_input_key_number_to_qcode(keycode);
 
     switch (qcode) {
-    case Q_KEY_CODE_1 ... Q_KEY_CODE_9: /* '1' to '9' keys */
-        if (con == NULL && down &&
-            qkbd_state_modifier_get(hci->hsi->kbd, QKBD_MOD_CTRL) &&
-            qkbd_state_modifier_get(hci->hsi->kbd, QKBD_MOD_ALT)) {
-            /* Reset the modifiers sent to the current console */
-            qkbd_state_lift_all_keys(hci->hsi->kbd);
-            console_select(qcode - Q_KEY_CODE_1);
-            return;
-        }
     default:
         break;
     }
@@ -290,10 +279,10 @@ void harmony_server_input_init(HarmonyServerDisplay *hsd, Error **errp)
     hsi->last_tracking_id = -1;
 
     if (keyboard_layout) {
-        hsi->kbd_layout = init_keyboard_layout(name2keysym,
+        hsi->kbd_layout = kbd_layout_new(name2keysym,
                                               keyboard_layout, errp);
     } else {
-        hsi->kbd_layout = init_keyboard_layout(name2keysym, "en-us", errp);
+        hsi->kbd_layout = kbd_layout_new(name2keysym, "en-us", errp);
     }
 
     if (!hsi->kbd_layout) {

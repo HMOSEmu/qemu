@@ -175,6 +175,27 @@ bool qemu_input_is_absolute(const QemuConsole *con)
     return qemu_dbus_display1_mouse_get_is_absolute(mouse);
 }
 
+bool qemu_input_is_multitouch(const QemuConsole *con)
+{
+    return false;
+}
+
+/* multitouch events have no D-Bus counterpart; drop them */
+void qemu_input_queue_btn(QemuConsole *src, InputButton btn, bool down)
+{
+}
+
+void qemu_input_queue_mtt(QemuConsole *src, InputMultiTouchType type,
+                          int slot, int tracking_id)
+{
+}
+
+void qemu_input_queue_mtt_abs(QemuConsole *src, InputAxis axis, int value,
+                              int min_in, int max_in,
+                              int min_out, int max_out)
+{
+}
+
 static void
 on_mouse_is_absolute_changed(GObject *gobject, GParamSpec *pspec,
                               gpointer user_data)

@@ -120,7 +120,7 @@ static void harmony_server_display_refresh(DisplayChangeListener *dcl)
     HarmonyClientDisplay *hcd, *hcdn;
 
     if (QTAILQ_EMPTY(&hsd->clients)) {
-        update_displaychangelistener(&hsd->dcl, HARMONY_SERVER_DISPLAY_REFRESH_INTERVAL_MAX);
+        qemu_console_listener_set_refresh(&hsd->dcl, HARMONY_SERVER_DISPLAY_REFRESH_INTERVAL_MAX);
         return;
     }
 
@@ -134,10 +134,10 @@ static void harmony_server_display_refresh(DisplayChangeListener *dcl)
 
     hsd->has_dirty = 0;
 
-    graphic_hw_update(hsd->dcl.con);
+    qemu_console_hw_update(hsd->dcl.con);
 
     if (harmony_server_trylock_display(hsd)) {
-        update_displaychangelistener(&hsd->dcl, hsd->refresh_interval);
+        qemu_console_listener_set_refresh(&hsd->dcl, hsd->refresh_interval);
         return;
     }
 
@@ -573,8 +573,8 @@ HarmonyServerDisplay* harmony_server_display_init(QemuOpts *opts)
                                 harmony_server_display_disconnect, 
                                 hsd);
 
-    hsd->dcl.ops = &dcl_ops;
-    register_displaychangelistener(&hsd->dcl);
+    qemu_console_register_listener(qemu_console_lookup_default(),
+                                   &hsd->dcl, &dcl_ops);
 
     harmony_server_display_start_worker_thread(hsd);
 

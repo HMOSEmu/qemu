@@ -3,11 +3,11 @@
 #include "qemu/iov.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/virtio/virtio-pipe.h"
 #include "include/qemu/lockable.h"
-#include "sysemu/rng.h"
-#include "sysemu/runstate.h"
+#include "system/rng.h"
+#include "system/runstate.h"
 #include "qom/object_interfaces.h"
 #include "trace.h"
 
@@ -446,13 +446,12 @@ static void virtio_pipe_get_config(VirtIODevice *vdev, uint8_t *config)
     cpu_to_le16s(&vp_conf->max_pipe_num);
 }
 
-static Property virtio_pipe_properties[] = {
+static const Property virtio_pipe_properties[] = {
     DEFINE_PROP_UINT16("max_num", VirtIOPipeDevice, conf.max_pipe_num,
                        MAX_PIPE_NUM_DEFAULT),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void virtio_pipe_class_init(ObjectClass *klass, void *data)
+static void virtio_pipe_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);

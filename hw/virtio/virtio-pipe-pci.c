@@ -1,6 +1,6 @@
 #include "qemu/osdep.h"
 #include "hw/virtio/virtio-pci.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/virtio/virtio-pipe.h"
 #include "qemu/module.h"
 #include "qom/object.h"
@@ -13,9 +13,8 @@ struct VirtIOPipePCI {
     VirtIOPipeDevice vdev;
 };
 
-static Property virtio_pipe_pci_properties[] = {
+static const Property virtio_pipe_pci_properties[] = {
     DEFINE_PROP_UINT32("vectors", VirtIOPCIProxy, nvectors, 2),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void virtio_pipe_pci_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
@@ -35,7 +34,7 @@ static void virtio_pipe_pci_instance_init(Object *obj)
                                 TYPE_VIRTIO_PIPE);
 }
 
-static void virtio_pipe_pci_class_init(ObjectClass *klass, void *data)
+static void virtio_pipe_pci_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     VirtioPCIClass *k = VIRTIO_PCI_CLASS(klass);

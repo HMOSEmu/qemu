@@ -309,7 +309,7 @@ static void harmony_websock_handshake_send_res_ok(HarmonyWebsock *hw,
               HARMONY_WEBSOCK_GUID_LEN + 1);
 
     /* hash and encode it */
-    if (qcrypto_hash_base64(QCRYPTO_HASH_ALG_SHA1,
+    if (qcrypto_hash_base64(QCRYPTO_HASH_ALGO_SHA1,
                             combined_key,
                             HARMONY_WEBSOCK_CLIENT_KEY_LEN +
                             HARMONY_WEBSOCK_GUID_LEN,
@@ -1218,7 +1218,7 @@ static GSource *harmony_websock_create_watch(QIOChannel *ioc,
 }
 
 static void harmony_websock_class_init(ObjectClass *klass,
-                                    void *class_data G_GNUC_UNUSED)
+                                    const void *class_data G_GNUC_UNUSED)
 {
     QIOChannelClass *ioc_klass = QIO_CHANNEL_CLASS(klass);
 
