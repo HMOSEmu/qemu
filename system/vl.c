@@ -3882,9 +3882,10 @@ void qemu_init(int argc, char **argv)
     qemu_harmony_pipe_init();
     harmony_pipe_add_service_loop();
     harmony_pipe_add_service_websock_passthrough();
-    harmony_pipe_add_service_audio();
 
     harmony_server_init(NULL,
                     qemu_find_opts_singleton("harmony-server"),
                     &error_fatal);
+
+    harmony_pipe_add_service_audio();
 }
