@@ -736,6 +736,18 @@ bool egl_init(const char *rendernode, DisplayGLMode mode, Error **errp)
 
 void egl_cleanup(void)
 {
+    /*
+     * eglTerminate() tears down the whole EGL display, including the
+     * resources of virglrenderer's still-live contexts (same display,
+     * render node). Their Mesa objects get freed underneath them and
+     * later exit-time code crashes with a NULL vtable call inside
+     * radeonsi_dri.so (SIGSEGV on every shutdown with
+     * -display egl-headless + virtio-gpu-gl). The 8.2.2 based build
+     * had no exit-time EGL teardown at all; mirror that: the process
+     * is on its way out, the kernel reclaims everything anyway.
+     */
+    return;
+
     if (qemu_egl_rn_ctx) {
         eglDestroyContext(qemu_egl_display, qemu_egl_rn_ctx);
         qemu_egl_rn_ctx = NULL;
