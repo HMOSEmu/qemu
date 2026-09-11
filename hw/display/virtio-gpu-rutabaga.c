@@ -7,6 +7,7 @@
 #include "trace.h"
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-gpu.h"
+#include "hw/virtio/virtio-gpu-bswap.h"
 #include "hw/virtio/virtio-gpu-pixman.h"
 #include "hw/virtio/virtio-iommu.h"
 #include "migration/blocker.h"
@@ -168,6 +169,7 @@ virtio_gpu_rutabaga_resource_unref(VirtIOGPU *g,
     if (res->image) {
         pixman_image_unref(res->image);
     }
+    g_free(res->blob);
 
     QTAILQ_REMOVE(&g->reslist, res, next);
     g_free(res);
@@ -259,7 +261,7 @@ rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
 
     for (i = 0; i < vb->conf.max_outputs; i++) {
         scanout = &vb->scanout[i];
-        if (i == res->scanout_bitmask) {
+        if (res->scanout_bitmask & (1u << i)) {
             found = true;
             break;
         }
@@ -269,26 +271,33 @@ rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
         return;
     }
 
-    /*
-     * Blob resources never get a pixman image (their display path is the
-     * SET_SCANOUT_BLOB surface over the blob mapping, host-composed for
-     * cross-domain/gfxstream buffers).  The guest kernel flushes blob
-     * framebuffers unconditionally on plane updates (virtgpu_plane.c),
-     * so dereferencing the NULL image here crashes the device.
+    /* Rutabaga resources are host-backed and have no guest iovecs.  For the
+     * surfaceless Harmony display, SET_SCANOUT_BLOB is represented by a
+     * Pixman surface owned by QEMU.  Read the rendered host resource into
+     * that surface on every flush so the display listener sees the pixels.
      */
-    if (!res->image) {
+    if (!res->image && !res->blob) {
+        return;
+    }
+
+    /* A legacy SET_SCANOUT resource may have a Pixman format-only image
+     * with no backing pointer.  Never hand a NULL iovec to the host
+     * transfer path; blob scanouts allocate their backing above. */
+    if (res->image && !pixman_image_get_data(res->image) && !res->blob) {
         return;
     }
 
     transfer.x = 0;
     transfer.y = 0;
     transfer.z = 0;
-    transfer.w = res->width;
-    transfer.h = res->height;
+    transfer.w = scanout->width;
+    transfer.h = scanout->height;
     transfer.d = 1;
+    transfer.stride = scanout->fb.stride;
+    transfer.offset = scanout->fb.offset;
 
-    transfer_iovec.iov_base = pixman_image_get_data(res->image);
-    transfer_iovec.iov_len = res->width * res->height * 4;
+    transfer_iovec.iov_base = res->image ? pixman_image_get_data(res->image) : res->blob;
+    transfer_iovec.iov_len = scanout->fb.stride * scanout->height;
 
     result = rutabaga_resource_transfer_read(vr->rutabaga, 0,
                                              rf.resource_id, &transfer,
@@ -297,12 +306,118 @@ rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
     qemu_console_update_full(scanout->con);
 }
 
+/*
+ * The generic virtio-gpu SET_SCANOUT_BLOB implementation assumes that the
+ * resource has guest backing (an iovec or a mapped blob).  Rutabaga's
+ * cross-domain and gfxstream resources are host-backed, so that assumption
+ * rejects the command before a scanout surface is installed.  Keep a local
+ * Pixman backing store for the surfaceless display and populate it from the
+ * host resource during RESOURCE_FLUSH above.
+ */
+static void
+rutabaga_cmd_set_scanout_blob(VirtIOGPU *g,
+                              struct virtio_gpu_ctrl_command *cmd)
+{
+    struct virtio_gpu_set_scanout_blob ss;
+    struct virtio_gpu_simple_resource *res;
+    struct virtio_gpu_scanout *scanout;
+    struct virtio_gpu_framebuffer fb = { 0 };
+    pixman_format_code_t pformat;
+    uint32_t scanout_bit;
+    VirtIOGPUBase *vb = VIRTIO_GPU_BASE(g);
+
+    VIRTIO_GPU_FILL_CMD(ss);
+    virtio_gpu_scanout_blob_bswap(&ss);
+    trace_virtio_gpu_cmd_set_scanout_blob(ss.scanout_id, ss.resource_id,
+                                          ss.r.width, ss.r.height,
+                                          ss.r.x, ss.r.y);
+
+    if (ss.scanout_id >= vb->conf.max_outputs) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID;
+        return;
+    }
+
+    scanout = &vb->scanout[ss.scanout_id];
+    if (scanout->resource_id != 0) {
+        struct virtio_gpu_simple_resource *old_res =
+            virtio_gpu_find_resource(g, scanout->resource_id);
+        if (old_res) {
+            old_res->scanout_bitmask &= ~(1u << ss.scanout_id);
+        }
+    }
+    if (ss.resource_id == 0) {
+        virtio_gpu_disable_scanout(g, ss.scanout_id);
+        return;
+    }
+
+    res = virtio_gpu_find_resource(g, ss.resource_id);
+    if (!res) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        return;
+    }
+
+    /* The resource dimensions are not present in the QEMU-side bookkeeping
+     * for a blob until the first SET_SCANOUT_BLOB command arrives. */
+    res->width = ss.width;
+    res->height = ss.height;
+    res->format = ss.format;
+
+    if (!virtio_gpu_scanout_blob_to_fb(&fb, &ss, res->blob_size)) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        return;
+    }
+
+    if (res->blob == NULL) {
+        res->blob = g_malloc0(res->blob_size);
+    }
+    if (res->blob == NULL) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY;
+        return;
+    }
+
+    pformat = fb.format;
+    if (!pformat) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        return;
+    }
+
+    if (res->image) {
+        pixman_image_unref(res->image);
+        res->image = NULL;
+    }
+    res->image = pixman_image_create_bits(pformat, fb.width, fb.height,
+                                          res->blob, fb.stride);
+    if (!res->image) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY;
+        return;
+    }
+
+    scanout_bit = 1u << ss.scanout_id;
+    res->scanout_bitmask |= scanout_bit;
+    scanout->resource_id = ss.resource_id;
+    scanout->x = ss.r.x;
+    scanout->y = ss.r.y;
+    scanout->width = ss.r.width;
+    scanout->height = ss.r.height;
+    scanout->fb = fb;
+    vb->enable = 1;
+
+    scanout->ds = qemu_create_displaysurface_pixman(res->image);
+    qemu_console_set_surface(scanout->con, NULL);
+    qemu_console_set_surface(scanout->con, scanout->ds);
+}
+
 static void
 rutabaga_cmd_set_scanout(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
 {
     struct virtio_gpu_simple_resource *res;
     struct virtio_gpu_scanout *scanout = NULL;
     struct virtio_gpu_set_scanout ss;
+    struct virtio_gpu_framebuffer fb = { 0 };
+    pixman_format_code_t pformat;
+    uint32_t bytes_pp;
+    uint64_t stride;
+    uint64_t backing_size;
 
     VirtIOGPUBase *vb = VIRTIO_GPU_BASE(g);
     VirtIOGPURutabaga *vr = VIRTIO_GPU_RUTABAGA(g);
@@ -316,6 +431,14 @@ rutabaga_cmd_set_scanout(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
 
     CHECK(ss.scanout_id < vb->conf.max_outputs, cmd);
     scanout = &vb->scanout[ss.scanout_id];
+
+    if (scanout->resource_id != 0 && scanout->resource_id != ss.resource_id) {
+        struct virtio_gpu_simple_resource *old_res =
+            virtio_gpu_find_resource(g, scanout->resource_id);
+        if (old_res) {
+            old_res->scanout_bitmask &= ~(1u << ss.scanout_id);
+        }
+    }
 
     if (ss.resource_id == 0) {
         qemu_console_set_surface(scanout->con, NULL);
@@ -332,18 +455,37 @@ rutabaga_cmd_set_scanout(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
         return;
     }
 
-    if (!res->image) {
-        pixman_format_code_t pformat;
-        pformat = virtio_gpu_get_pixman_format(res->format);
-        CHECK(pformat, cmd);
-
-        res->image = pixman_image_create_bits(pformat,
-                                              res->width,
-                                              res->height,
-                                              NULL, 0);
+    /* Cross-domain/gfxstream resources arrive through the legacy
+     * SET_SCANOUT command on this Harmony guest even though their backing is
+     * host-only.  Give QEMU a CPU-visible surface so RESOURCE_FLUSH can read
+     * the host ColorBuffer into it.  Guest-backed resources already carry an
+     * image and keep their normal path. */
+    pformat = virtio_gpu_get_pixman_format(res->format);
+    CHECK(pformat, cmd);
+    bytes_pp = DIV_ROUND_UP(PIXMAN_FORMAT_BPP(pformat), 8);
+    stride = (uint64_t)res->width * bytes_pp;
+    backing_size = stride * res->height;
+    if (!res->image || !pixman_image_get_data(res->image)) {
+        if (res->image) {
+            pixman_image_unref(res->image);
+            res->image = NULL;
+        }
+        if (!res->blob) {
+            res->blob = g_try_malloc0(backing_size);
+            CHECK(res->blob, cmd);
+            res->blob_size = backing_size;
+        }
+        res->image = pixman_image_create_bits(pformat, res->width,
+                                              res->height, res->blob,
+                                              stride);
         CHECK(res->image, cmd);
-        pixman_image_ref(res->image);
     }
+
+    fb.format = pformat;
+    fb.width = res->width;
+    fb.height = res->height;
+    fb.stride = pixman_image_get_stride(res->image);
+    fb.offset = 0;
 
     vb->enable = 1;
 
@@ -351,7 +493,13 @@ rutabaga_cmd_set_scanout(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
     scanout->ds = qemu_create_displaysurface_pixman(res->image);
     qemu_console_set_surface(scanout->con, NULL);
     qemu_console_set_surface(scanout->con, scanout->ds);
-    res->scanout_bitmask = ss.scanout_id;
+    scanout->resource_id = ss.resource_id;
+    scanout->x = ss.r.x;
+    scanout->y = ss.r.y;
+    scanout->width = ss.r.width;
+    scanout->height = ss.r.height;
+    scanout->fb = fb;
+    res->scanout_bitmask = 1u << ss.scanout_id;
 }
 
 static void
@@ -826,7 +974,7 @@ virtio_gpu_rutabaga_process_cmd(VirtIOGPU *g,
             cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
             break;
         }
-        virtio_gpu_set_scanout_blob(g, cmd);
+        rutabaga_cmd_set_scanout_blob(g, cmd);
         break;
     case VIRTIO_GPU_CMD_RESOURCE_FLUSH:
         rutabaga_cmd_resource_flush(g, cmd);

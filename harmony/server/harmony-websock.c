@@ -6,7 +6,10 @@
 #include "qemu/iov.h"
 #include "qemu/module.h"
 
-#define HARMONY_WEBSOCK_MAX_BUFFER 1048576
+/* A 1080x2340 display at JPEG quality 50 can exceed one MiB.  The old
+ * limit made qio_channel_writev() emit a complete FIN frame for only the
+ * first MiB, so display clients received a truncated JPEG. */
+#define HARMONY_WEBSOCK_MAX_BUFFER (16 * 1024 * 1024)
 
 #define HARMONY_WEBSOCK_CLIENT_KEY_LEN 24
 #define HARMONY_WEBSOCK_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
