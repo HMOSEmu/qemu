@@ -269,6 +269,17 @@ rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
         return;
     }
 
+    /*
+     * Blob resources never get a pixman image (their display path is the
+     * SET_SCANOUT_BLOB surface over the blob mapping, host-composed for
+     * cross-domain/gfxstream buffers).  The guest kernel flushes blob
+     * framebuffers unconditionally on plane updates (virtgpu_plane.c),
+     * so dereferencing the NULL image here crashes the device.
+     */
+    if (!res->image) {
+        return;
+    }
+
     transfer.x = 0;
     transfer.y = 0;
     transfer.z = 0;
@@ -809,6 +820,13 @@ virtio_gpu_rutabaga_process_cmd(VirtIOGPU *g,
         break;
     case VIRTIO_GPU_CMD_SET_SCANOUT:
         rutabaga_cmd_set_scanout(g, cmd);
+        break;
+    case VIRTIO_GPU_CMD_SET_SCANOUT_BLOB:
+        if (!virtio_gpu_blob_enabled(g->parent_obj.conf)) {
+            cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+            break;
+        }
+        virtio_gpu_set_scanout_blob(g, cmd);
         break;
     case VIRTIO_GPU_CMD_RESOURCE_FLUSH:
         rutabaga_cmd_resource_flush(g, cmd);

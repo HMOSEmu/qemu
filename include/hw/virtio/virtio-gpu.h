@@ -386,6 +386,13 @@ bool virtio_gpu_scanout_blob_to_fb(struct virtio_gpu_framebuffer *fb,
                                    struct virtio_gpu_set_scanout_blob *ss,
                                    uint64_t blob_size);
 
+/*
+ * virtio_gpu_set_scanout_blob() - scanout a blob resource (shared with
+ * the rutabaga device, whose command switch otherwise drops the op).
+ */
+void virtio_gpu_set_scanout_blob(VirtIOGPU *g,
+                                 struct virtio_gpu_ctrl_command *cmd);
+
 /* virtio-gpu-udmabuf.c */
 bool virtio_gpu_have_udmabuf(void);
 void virtio_gpu_init_udmabuf(struct virtio_gpu_simple_resource *res);

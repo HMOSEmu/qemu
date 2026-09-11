@@ -834,8 +834,8 @@ bool virtio_gpu_scanout_blob_to_fb(struct virtio_gpu_framebuffer *fb,
 
 
 
-static void virtio_gpu_set_scanout_blob(VirtIOGPU *g,
-                                        struct virtio_gpu_ctrl_command *cmd)
+void virtio_gpu_set_scanout_blob(VirtIOGPU *g,
+                                 struct virtio_gpu_ctrl_command *cmd)
 {
     struct virtio_gpu_simple_resource *res;
     struct virtio_gpu_framebuffer fb = { 0 };
