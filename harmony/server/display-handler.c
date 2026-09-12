@@ -57,6 +57,31 @@ static void harmony_server_display_refresh_surface(HarmonyServerDisplay *hsd)
         memcpy(server_ptr, guest_ptr, line_bytes);
     }
 
+    /* Keep the display transport observable while diagnosing frame corruption.
+     * The virtio-gpu readback path logs the same source resource; comparing
+     * these samples tells us whether corruption occurs before or during the
+     * Harmony/JPEG worker. */
+    static unsigned int diag_refresh_count;
+    if (diag_refresh_count++ < 1000 && server_row0 != NULL) {
+        const size_t center = (size_t)(height / 2) * server_stride +
+                              (size_t)(width / 2) * 4;
+        const size_t last = (size_t)(height - 1) * server_stride +
+                            (size_t)(width - 1) * 4;
+        error_report("[harmony-fb-diag] seq=%" PRIu64 " guest=%p gdata=%p "
+                     "guestfmt=%d imagefmt=%d gstride=%d %dx%d "
+                     "first=%02x %02x %02x %02x center=%02x %02x %02x %02x "
+                     "last=%02x %02x %02x %02x",
+                     hsd->fb_seq, (void *)hsd->guest_fb,
+                     (void *)pixman_image_get_data(hsd->guest_fb), hsd->guest_format,
+                     pixman_image_get_format(hsd->guest_fb),
+                     pixman_image_get_stride(hsd->guest_fb), width, height,
+                     server_row0[0], server_row0[1], server_row0[2], server_row0[3],
+                     server_row0[center], server_row0[center + 1],
+                     server_row0[center + 2], server_row0[center + 3],
+                     server_row0[last], server_row0[last + 1],
+                     server_row0[last + 2], server_row0[last + 3]);
+    }
+
     qemu_pixman_image_unref(tmpbuf);
 
     hsd->fb_seq++;

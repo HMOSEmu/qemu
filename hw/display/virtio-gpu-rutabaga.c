@@ -30,6 +30,12 @@ struct rutabaga_aio_data {
     struct rutabaga_fence fence;
 };
 
+struct rutabaga_flush_data {
+    VirtIOGPU *g;
+    uint32_t resource_id;
+    uint32_t retries;
+};
+
 static void
 virtio_gpu_rutabaga_update_cursor(VirtIOGPU *g, struct virtio_gpu_scanout *s,
                                   uint32_t resource_id)
@@ -236,28 +242,28 @@ rutabaga_cmd_context_destroy(VirtIOGPU *g,
 }
 
 static void
-rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
+virtio_gpu_rutabaga_resource_flush_bh(void *opaque)
 {
+    struct rutabaga_flush_data *data = opaque;
+    VirtIOGPU *g = data->g;
+    uint32_t resource_id = data->resource_id;
     int32_t result, i;
     struct virtio_gpu_scanout *scanout = NULL;
     struct virtio_gpu_simple_resource *res;
     struct rutabaga_transfer transfer = { 0 };
     struct iovec transfer_iovec;
-    struct virtio_gpu_resource_flush rf;
     bool found = false;
 
     VirtIOGPUBase *vb = VIRTIO_GPU_BASE(g);
     VirtIOGPURutabaga *vr = VIRTIO_GPU_RUTABAGA(g);
     if (vr->headless) {
-        return;
+        goto out;
     }
 
-    VIRTIO_GPU_FILL_CMD(rf);
-    trace_virtio_gpu_cmd_res_flush(rf.resource_id,
-                                   rf.r.width, rf.r.height, rf.r.x, rf.r.y);
-
-    res = virtio_gpu_find_resource(g, rf.resource_id);
-    CHECK(res, cmd);
+    res = virtio_gpu_find_resource(g, resource_id);
+    if (!res) {
+        goto out;
+    }
 
     for (i = 0; i < vb->conf.max_outputs; i++) {
         scanout = &vb->scanout[i];
@@ -268,7 +274,7 @@ rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
     }
 
     if (!found) {
-        return;
+        goto out;
     }
 
     /* Rutabaga resources are host-backed and have no guest iovecs.  For the
@@ -277,14 +283,14 @@ rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
      * that surface on every flush so the display listener sees the pixels.
      */
     if (!res->image && !res->blob) {
-        return;
+        goto out;
     }
 
     /* A legacy SET_SCANOUT resource may have a Pixman format-only image
      * with no backing pointer.  Never hand a NULL iovec to the host
      * transfer path; blob scanouts allocate their backing above. */
     if (res->image && !pixman_image_get_data(res->image) && !res->blob) {
-        return;
+        goto out;
     }
 
     transfer.x = 0;
@@ -300,10 +306,80 @@ rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
     transfer_iovec.iov_len = scanout->fb.stride * scanout->height;
 
     result = rutabaga_resource_transfer_read(vr->rutabaga, 0,
-                                             rf.resource_id, &transfer,
+                                             resource_id, &transfer,
                                              &transfer_iovec);
-    CHECK(!result, cmd);
+    if (result == -EAGAIN && data->retries++ < 1000) {
+        /* The Vulkan decoder may still be processing the guest's QSRI on a
+         * different host work queue. Retry on a later AIO turn so that queue
+         * can make progress; never block the QEMU event loop here. */
+        if (data->retries <= 4) {
+            error_report("[scanout-retry] res=%u attempt=%u", resource_id,
+                         data->retries);
+        }
+        aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                                virtio_gpu_rutabaga_resource_flush_bh, data);
+        return;
+    }
+    if (result) {
+        goto out;
+    }
+    static unsigned int diag_flush_entry_count;
+    if (diag_flush_entry_count++ < 256) {
+        error_report("[scanout-diag-entry] res=%u flags=0x%x fence=%" PRIu64
+                     " scanout=%p image=%p data=%p len=%zu",
+                     resource_id, 0u, (uint64_t)0,
+                     (void *)scanout, (void *)res->image,
+                     res->image ? (void *)pixman_image_get_data(res->image) : NULL,
+                     transfer_iovec.iov_len);
+    }
+    if (res->image && pixman_image_get_data(res->image)) {
+        static unsigned int diag_flush_count;
+        if (diag_flush_count++ < 256) {
+            const uint8_t *pixels = (const uint8_t *)pixman_image_get_data(res->image);
+            const size_t row_bytes = scanout->fb.stride;
+            const size_t center = (size_t)(scanout->height / 2) * row_bytes +
+                                  (size_t)(scanout->width / 2) * 4;
+            const size_t last = (size_t)(scanout->height - 1) * row_bytes +
+                                (size_t)(scanout->width - 1) * 4;
+            error_report("[scanout-diag] res=%u %ux%u stride=%u result=%d "
+                         "first=%02x %02x %02x %02x center=%02x %02x %02x %02x "
+                         "last=%02x %02x %02x %02x",
+                         resource_id, scanout->width, scanout->height,
+                         scanout->fb.stride, result, pixels[0], pixels[1], pixels[2], pixels[3],
+                         pixels[center], pixels[center + 1], pixels[center + 2], pixels[center + 3],
+                         pixels[last], pixels[last + 1], pixels[last + 2], pixels[last + 3]);
+        }
+    }
     qemu_console_update_full(scanout->con);
+
+out:
+    g_free(data);
+}
+
+static void
+rutabaga_cmd_resource_flush(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
+{
+    struct virtio_gpu_resource_flush rf;
+    struct rutabaga_flush_data *data;
+
+    VirtIOGPURutabaga *vr = VIRTIO_GPU_RUTABAGA(g);
+    if (vr->headless) {
+        return;
+    }
+
+    VIRTIO_GPU_FILL_CMD(rf);
+    trace_virtio_gpu_cmd_res_flush(rf.resource_id,
+                                   rf.r.width, rf.r.height, rf.r.x, rf.r.y);
+
+    /* Submit the readback after the current virtio command batch has drained.
+     * The guest's Vulkan decoder stream and RESOURCE_FLUSH are independent
+     * host work queues; doing the transfer inline can observe a ColorBuffer
+     * before vkQueueSignalReleaseImageANDROID has released it. */
+    data = g_new0(struct rutabaga_flush_data, 1);
+    data->g = g;
+    data->resource_id = rf.resource_id;
+    aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                            virtio_gpu_rutabaga_resource_flush_bh, data);
 }
 
 /*
