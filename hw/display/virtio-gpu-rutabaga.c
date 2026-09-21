@@ -350,6 +350,13 @@ virtio_gpu_rutabaga_resource_flush_bh(void *opaque)
                          pixels[last], pixels[last + 1], pixels[last + 2], pixels[last + 3]);
         }
     }
+    if (scanout->stable_image && res->image) {
+        pixman_image_composite32(PIXMAN_OP_SRC, res->image, NULL,
+                                 scanout->stable_image,
+                                 0, 0, 0, 0, 0, 0,
+                                 pixman_image_get_width(scanout->stable_image),
+                                 pixman_image_get_height(scanout->stable_image));
+    }
     qemu_console_update_full(scanout->con);
 
 out:
@@ -461,7 +468,14 @@ rutabaga_cmd_set_scanout_blob(VirtIOGPU *g,
         pixman_image_unref(res->image);
         res->image = NULL;
     }
-    res->image = pixman_image_create_bits(pformat, fb.width, fb.height,
+    /* fb.width/height are derived from the blob size (stride-aligned, e.g.
+     * 1088 for a 1080-wide scanout with a 4352-byte pitch).  The console
+     * surface must carry the *logical* scanout rectangle instead, or every
+     * display listener that packs rows by width (VNC raw/hextile) shows an
+     * 8-pixel-per-row shear.  Pixman decouples width from stride, and the
+     * flush readback keeps filling rows at fb.stride, so the trailing
+     * alignment slack is simply not scanned out. */
+    res->image = pixman_image_create_bits(pformat, ss.r.width, ss.r.height,
                                           res->blob, fb.stride);
     if (!res->image) {
         cmd->error = VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY;
@@ -478,9 +492,38 @@ rutabaga_cmd_set_scanout_blob(VirtIOGPU *g,
     scanout->fb = fb;
     vb->enable = 1;
 
-    scanout->ds = qemu_create_displaysurface_pixman(res->image);
-    qemu_console_set_surface(scanout->con, NULL);
-    qemu_console_set_surface(scanout->con, scanout->ds);
+    /* The console gets ONE stable surface.  This guest alternates RGB/BGR
+     * (x8r8g8b8 / x8b8g8r8) buffers on every page flip; installing a fresh
+     * surface per flip drove VNC through resize+redepth storms that clients
+     * showed as garbage.  Per-resource frames are converted into
+     * stable_image by the flush path instead. */
+    int stable_recreate =
+        scanout->stable_image == NULL ||
+        pixman_image_get_width(scanout->stable_image) != (int)ss.r.width ||
+        pixman_image_get_height(scanout->stable_image) != (int)ss.r.height;
+    if (stable_recreate) {
+        if (scanout->stable_image) {
+            pixman_image_unref(scanout->stable_image);
+        }
+        scanout->stable_image =
+            pixman_image_create_bits(PIXMAN_x8r8g8b8, ss.r.width, ss.r.height,
+                                     NULL, 0);
+    }
+    if (scanout->stable_image == NULL) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY;
+        return;
+    }
+    if (stable_recreate || scanout->ds == NULL) {
+        /* The console owns and frees the surface it holds; never free ds
+         * manually, just hand it a fresh one wrapping stable_image. */
+        DisplaySurface *new_ds =
+            qemu_create_displaysurface_pixman(scanout->stable_image);
+        if (scanout->ds == NULL) {
+            qemu_console_set_surface(scanout->con, NULL);
+        }
+        scanout->ds = new_ds;
+        qemu_console_set_surface(scanout->con, scanout->ds);
+    }
 }
 
 static void
@@ -551,8 +594,12 @@ rutabaga_cmd_set_scanout(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
             CHECK(res->blob, cmd);
             res->blob_size = backing_size;
         }
-        res->image = pixman_image_create_bits(pformat, res->width,
-                                              res->height, res->blob,
+        /* Cross-domain resources report stride-aligned dimensions
+         * (1088 for a 1080-wide buffer at a 4352-byte pitch).  Expose the
+         * logical scanout rect to the console so width-packing listeners
+         * (VNC) do not shear every row; the stride keeps the true pitch. */
+        res->image = pixman_image_create_bits(pformat, ss.r.width,
+                                              ss.r.height, res->blob,
                                               stride);
         CHECK(res->image, cmd);
     }
@@ -566,9 +613,38 @@ rutabaga_cmd_set_scanout(VirtIOGPU *g, struct virtio_gpu_ctrl_command *cmd)
     vb->enable = 1;
 
     /* realloc the surface ptr */
-    scanout->ds = qemu_create_displaysurface_pixman(res->image);
-    qemu_console_set_surface(scanout->con, NULL);
-    qemu_console_set_surface(scanout->con, scanout->ds);
+    /* The console gets ONE stable surface.  This guest alternates RGB/BGR
+     * (x8r8g8b8 / x8b8g8r8) buffers on every page flip; installing a fresh
+     * surface per flip drove VNC through resize+redepth storms that clients
+     * showed as garbage.  Per-resource frames are converted into
+     * stable_image by the flush path instead. */
+    int stable_recreate =
+        scanout->stable_image == NULL ||
+        pixman_image_get_width(scanout->stable_image) != (int)ss.r.width ||
+        pixman_image_get_height(scanout->stable_image) != (int)ss.r.height;
+    if (stable_recreate) {
+        if (scanout->stable_image) {
+            pixman_image_unref(scanout->stable_image);
+        }
+        scanout->stable_image =
+            pixman_image_create_bits(PIXMAN_x8r8g8b8, ss.r.width, ss.r.height,
+                                     NULL, 0);
+    }
+    if (scanout->stable_image == NULL) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY;
+        return;
+    }
+    if (stable_recreate || scanout->ds == NULL) {
+        /* The console owns and frees the surface it holds; never free ds
+         * manually, just hand it a fresh one wrapping stable_image. */
+        DisplaySurface *new_ds =
+            qemu_create_displaysurface_pixman(scanout->stable_image);
+        if (scanout->ds == NULL) {
+            qemu_console_set_surface(scanout->con, NULL);
+        }
+        scanout->ds = new_ds;
+        qemu_console_set_surface(scanout->con, scanout->ds);
+    }
     scanout->resource_id = ss.resource_id;
     scanout->x = ss.r.x;
     scanout->y = ss.r.y;

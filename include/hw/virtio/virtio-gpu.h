@@ -74,6 +74,8 @@ struct virtio_gpu_framebuffer {
 struct virtio_gpu_scanout {
     QemuConsole *con;
     DisplaySurface *ds;
+    pixman_image_t *stable_image;   /* fixed console backing; per-resource
+                                       frames are composited into it on flush */
     uint32_t width, height;
     int x, y;
     int invalidate;
